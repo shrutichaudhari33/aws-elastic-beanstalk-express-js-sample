@@ -26,7 +26,7 @@ stage('Install & Test (Node 16)') {
 
 stage('Security Scan (Snyk - Container)') {
   steps {
-    withCredentials([string(credentialsId: 'synk-token', variable: 'SNYK_TOKEN')]) {
+    withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
       script {
         def snykExit = sh(
           script: """
