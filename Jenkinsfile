@@ -39,17 +39,17 @@ pipeline {
 
     // Task 3.2.a: Dependency (Open Source) scan — fail on High/Critical
     stage('Snyk - Open Source (deps)') {
-      steps {
-        withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
-          sh '''
-            docker run --rm \
-              -e SNYK_TOKEN=$SNYK_TOKEN \
-              -v $WORKSPACE:/app -w /app \
-              snyk/snyk:stable snyk test --severity-threshold=high
-          '''
-        }
-      }
+  steps {
+    withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
+      sh '''
+        docker run --rm \
+          -e SNYK_TOKEN=$SNYK_TOKEN \
+          -v $WORKSPACE:/app -w /app \
+          snyk/snyk:docker snyk test --severity-threshold=high
+      '''
     }
+  }
+}
 
     // Task 3.1.b(iii): Build the application image (using DinD)
     stage('Build Docker Image') {
@@ -62,20 +62,19 @@ pipeline {
     }
 
     // Task 3.2.b: Container image scan: fail on High/Critical
-    stage('Snyk - Container (image)') {
-      steps {
-        withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
-          sh '''
-            docker run --rm \
-              -e SNYK_TOKEN=$SNYK_TOKEN \
-              -e DOCKER_HOST=$DOCKER_HOST \
-              snyk/snyk:docker snyk container test \
-              $IMAGE --severity-threshold=high
-          '''
-        }
-      }
+stage('Snyk - Container (image)') {
+  steps {
+    withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
+      sh '''
+        docker run --rm \
+          -e SNYK_TOKEN=$SNYK_TOKEN \
+          -e DOCKER_HOST=$DOCKER_HOST \
+          snyk/snyk:docker snyk container test \
+          $IMAGE --severity-threshold=high
+      '''
     }
-
+  }
+}
     // Task 3.1.b(iii): Push to Docker Hub
     stage('Push Docker Image') {
       steps {
