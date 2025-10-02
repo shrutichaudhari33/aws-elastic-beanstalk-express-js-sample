@@ -52,14 +52,14 @@ pipeline {
 }
 
     // Task 3.1.b(iii): Build the application image (using DinD)
-    stage('Build Docker Image') {
-      steps {
-        sh '''
-          docker build -t $IMAGE $WORKSPACE
-          docker tag $IMAGE $DOCKER_HUB_REPO:latest
-        '''
-      }
-    }
+stage('Build Docker Image') {
+  steps {
+    sh '''
+      docker build -f $WORKSPACE/Dockerfile -t $IMAGE $WORKSPACE
+      docker tag $IMAGE $DOCKER_HUB_REPO:latest
+    '''
+  }
+}
 
     // Task 3.2.b: Container image scan: fail on High/Critical
 stage('Snyk - Container (image)') {
