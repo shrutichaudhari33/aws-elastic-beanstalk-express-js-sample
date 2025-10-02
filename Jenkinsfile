@@ -24,22 +24,31 @@ stage('Install & Test (Node 16)') {
   }
 }
 
-        stage('Security Scan (Snyk)') {
-            steps {
-                script {
-                    def snykExit = sh(script: '''
-                        docker run --rm -v $PWD:/app -w /app snyk/snyk:docker test || echo $?
-                    ''', returnStdout: true).trim()
-                    snykExit = snykExit.isInteger() ? snykExit.toInteger() : 0
+stage('Security Scan (Snyk - Container)') {
+  steps {
+    withCredentials([string(credentialsId: 'synk-token', variable: 'SNYK_TOKEN')]) {
+      script {
+        def snykExit = sh(
+          script: """
+            docker run --rm \
+              -e SNYK_TOKEN=$SNYK_TOKEN \
+              -e DOCKER_HOST=$DOCKER_HOST \
+              snyk/snyk:docker snyk container test $IMAGE --severity-threshold=high || echo \$?
+          """,
+          returnStdout: true
+        ).trim()
 
-                    if (snykExit != 0) {
-                        error "Pipeline failed due to High/Critical vulnerabilities detected by Snyk!"
-                    } else {
-                        echo "No High/Critical vulnerabilities found."
-                    }
-                }
-            }
+        snykExit = snykExit.isInteger() ? snykExit.toInteger() : 0
+
+        if (snykExit != 0) {
+          error "Pipeline failed due to High/Critical vulnerabilities detected by Snyk!"
+        } else {
+          echo "No High/Critical vulnerabilities found."
         }
+      }
+    }
+  }
+}
 
         stage('Build Docker Image') {
             steps {
