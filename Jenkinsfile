@@ -15,14 +15,14 @@ pipeline {
             }
         }
 
-        stage('Install & Test (Node 16)') {
-            steps {
-                script {
-                    sh 'docker run --rm -v $PWD:/app -w /app node:16 npm install'
-                    sh 'docker run --rm -v $PWD:/app -w /app node:16 npm test || echo "Tests completed"'
-                }
-            }
-        }
+stage('Install & Test (Node 16)') {
+  steps {
+    script {
+      sh 'docker run --rm -v $WORKSPACE:/app -w /app node:16 npm install'
+      sh 'docker run --rm -v $WORKSPACE:/app -w /app node:16 npm test || echo "Tests completed"'
+    }
+  }
+}
 
         stage('Security Scan (Snyk)') {
             steps {
@@ -30,7 +30,6 @@ pipeline {
                     def snykExit = sh(script: '''
                         docker run --rm -v $PWD:/app -w /app snyk/snyk:docker test || echo $?
                     ''', returnStdout: true).trim()
-
                     snykExit = snykExit.isInteger() ? snykExit.toInteger() : 0
 
                     if (snykExit != 0) {
