@@ -68,13 +68,15 @@ stage('Snyk - Container (image)') {
       sh '''
         docker run --rm \
           -e SNYK_TOKEN=$SNYK_TOKEN \
-          -e DOCKER_HOST=$DOCKER_HOST \
+          -v /var/run/docker.sock:/var/run/docker.sock \
           snyk/snyk:docker snyk container test \
           $IMAGE --severity-threshold=high
       '''
     }
   }
 }
+
+
     // Task 3.1.b(iii): Push to Docker Hub
     stage('Push Docker Image') {
       steps {
