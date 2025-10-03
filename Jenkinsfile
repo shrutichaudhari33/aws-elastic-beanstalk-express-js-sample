@@ -47,18 +47,24 @@ pipeline {
       }
     }
 
-    stage('Build Docker Image') {
-      agent { docker { image 'docker:24-cli'; args '-u root:root'; reuseNode true } }
-      environment { DOCKER_HOST = 'tcp://dind:2375' }
-      steps {
-        sh '''
-          docker version || true
-          docker build -f Dockerfile \
-            -t "$IMAGE_NAME:$BUILD_TAG" \
-            -t "$IMAGE_NAME:latest" .
-        '''
-      }
+stage('Build Docker Image') {
+  agent {
+    docker {
+      image 'docker:24-cli'
+      // share dind's network + set DOCKER_HOST inside the container
+      args '--network=container:dind -u root:root -e DOCKER_HOST=tcp://127.0.0.1:2375'
+      reuseNode true
     }
+  }
+  steps {
+    sh '''
+      docker version || true
+      docker build -f Dockerfile \
+        -t "$IMAGE_NAME:$BUILD_TAG" \
+        -t "$IMAGE_NAME:latest" .
+    '''
+  }
+}
 
     stage('Snyk - Open Source (deps)') {
       agent { docker { image 'snyk/snyk:docker'; args '-u root:root'; reuseNode true } }
@@ -69,33 +75,43 @@ pipeline {
       }
     }
 
-    stage('Snyk - Container (image)') {
-      agent { docker { image 'snyk/snyk:docker'; args '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'; reuseNode true } }
-      environment { DOCKER_HOST = 'tcp://dind:2375' }
-      steps {
-        withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
-          sh 'snyk container test "$IMAGE_NAME:$BUILD_TAG" --severity-threshold=high'
-        }
-      }
-    }
-
-    stage('Push Docker Image') {
-      agent { docker { image 'docker:24-cli'; args '-u root:root'; reuseNode true } }
-      environment { DOCKER_HOST = 'tcp://dind:2375' }
-      steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
-                                          usernameVariable: 'DOCKERHUB_USER',
-                                          passwordVariable: 'DOCKERHUB_PASS')]) {
-          sh '''
-            echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
-            docker push "$IMAGE_NAME:$BUILD_TAG"
-            docker push "$IMAGE_NAME:latest"
-            docker logout || true
-          '''
-        }
-      }
+stage('Snyk - Container (image)') {
+  agent {
+    docker {
+      image 'snyk/snyk:docker'
+      // use the same trick; no need to mount /var/run/docker.sock anymore
+      args '--network=container:dind -u root:root -e DOCKER_HOST=tcp://127.0.0.1:2375'
+      reuseNode true
     }
   }
+  steps {
+    withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
+      sh 'snyk container test "$IMAGE_NAME:$BUILD_TAG" --severity-threshold=high'
+    }
+  }
+}
+
+stage('Push Docker Image') {
+  agent {
+    docker {
+      image 'docker:24-cli'
+      args '--network=container:dind -u root:root -e DOCKER_HOST=tcp://127.0.0.1:2375'
+      reuseNode true
+    }
+  }
+  steps {
+    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                                      usernameVariable: 'DOCKERHUB_USER',
+                                      passwordVariable: 'DOCKERHUB_PASS')]) {
+      sh '''
+        docker login -u "$DOCKERHUB_USER" -p "$DOCKERHUB_PASS"
+        docker push "$IMAGE_NAME:$BUILD_TAG"
+        docker push "$IMAGE_NAME:latest"
+        docker logout || true
+      '''
+    }
+  }
+}
 
   post {
     always {
