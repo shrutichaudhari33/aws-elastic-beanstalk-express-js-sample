@@ -1,12 +1,21 @@
-FROM node:18-alpine
-WORKDIR /app
-RUN apk update && apk upgrade --no-cache
+# Runtime must also be Node 16 per assignment
+FROM node:16-alpine
 
+WORKDIR /app
+
+# Install only production deps
 COPY package*.json ./
-RUN if [ -f package-lock.json ]; then npm ci --only=production; else npm install --production; fi
+RUN if [ -f package-lock.json ]; then \
+      npm ci --omit=dev; \
+    else \
+      npm install --omit=dev; \
+    fi
+
+# App files
 COPY . .
+
 ENV NODE_ENV=production
 ENV PORT=8080
 EXPOSE 8080
-RUN npm install -g npm@10.2.0
+
 CMD ["node", "app.js"]
