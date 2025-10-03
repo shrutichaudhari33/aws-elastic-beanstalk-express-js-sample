@@ -1,19 +1,19 @@
 pipeline {
   agent any
 
-  options { 
+  options {
     skipDefaultCheckout(true)
-    disableConcurrentBuilds()        //  avoid Jenkins making @2, @3 workspaces
+    disableConcurrentBuilds()       // avoids overlapping builds, but we still stash/unstash for safety
     timestamps()
   }
 
   tools { git 'git' }
 
   environment {
-    DOCKER_HOST = 'tcp://dind:2375'   // talking to your DinD sidecar
+    DOCKER_HOST   = 'tcp://dind:2375'
     DOCKER_DRIVER = 'overlay2'
-    IMAGE_NAME = 'shrutichaudhari33/aws-elastic-beanstalk-sample'
-    BUILD_TAG  = "${env.BUILD_NUMBER}"
+    IMAGE_NAME    = 'shrutichaudhari33/aws-elastic-beanstalk-sample'
+    BUILD_TAG     = "${env.BUILD_NUMBER}"
   }
 
   stages {
@@ -26,33 +26,40 @@ pipeline {
           userRemoteConfigs: [[ url: 'https://github.com/shrutichaudhari33/aws-elastic-beanstalk-express-js-sample.git' ]],
           gitTool: 'git'
         ])
-        sh 'ls -la'   //  confirm package.json exists here
+        sh 'ls -la' // prove package.json is here
+        // Save the workspace so every container stage can restore it,
+        // regardless of Jenkins using @2/@3 folders.
+        stash name: 'ws', includes: '**/*', useDefaultExcludes: false, allowEmpty: false
       }
     }
 
     stage('Install & Test (Node 16)') {
-      agent { docker { image 'node:16-bullseye'; args '-u root:root' } }
+      agent { docker { image 'node:16-bullseye'; args '-u root:root'; reuseNode true } }
       steps {
-        dir("${env.WORKSPACE}") {
-          sh '''
-            echo "Contents of workspace:"
-            ls -la
-            node -v
-            if [ -f package-lock.json ]; then
-              npm ci
-            else
-              npm install
-            fi
-            npm -s test || echo "No tests defined"
-          '''
-        }
+        // Restore code into whatever workspace this container uses
+        deleteDir()
+        unstash 'ws'
+        sh '''
+          echo "Contents of workspace (node stage):"
+          ls -la
+          node -v
+          if [ -f package-lock.json ]; then
+            npm ci
+          else
+            npm install
+          fi
+          npm -s test || echo "No tests defined"
+        '''
       }
     }
 
     stage('Build Docker Image') {
-      agent { docker { image 'docker:24-cli'; args '-u root:root' } }
+      agent { docker { image 'docker:24-cli'; args '-u root:root'; reuseNode true } }
       environment { DOCKER_HOST = 'tcp://dind:2375' }
       steps {
+        // Ensure Docker build context exists in this container workspace
+        deleteDir()
+        unstash 'ws'
         sh '''
           docker version || true
           docker build -f Dockerfile \
@@ -63,9 +70,11 @@ pipeline {
     }
 
     stage('Snyk - Open Source (deps)') {
-      agent { docker { image 'snyk/snyk:docker'; args '-u root:root' } }
+      agent { docker { image 'snyk/snyk:docker'; args '-u root:root'; reuseNode true } }
       environment { DOCKER_HOST = 'tcp://dind:2375' }
       steps {
+        deleteDir()
+        unstash 'ws'
         withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
           sh 'snyk test --severity-threshold=high'
         }
@@ -73,7 +82,7 @@ pipeline {
     }
 
     stage('Snyk - Container (image)') {
-      agent { docker { image 'snyk/snyk:docker'; args '-u root:root -v /var/run/docker.sock:/var/run/docker.sock' } }
+      agent { docker { image 'snyk/snyk:docker'; args '-u root:root -v /var/run/docker.sock:/var/run/docker.sock'; reuseNode true } }
       environment { DOCKER_HOST = 'tcp://dind:2375' }
       steps {
         withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
@@ -83,7 +92,7 @@ pipeline {
     }
 
     stage('Push Docker Image') {
-      agent { docker { image 'docker:24-cli'; args '-u root:root' } }
+      agent { docker { image 'docker:24-cli'; args '-u root:root'; reuseNode true } }
       environment { DOCKER_HOST = 'tcp://dind:2375' }
       steps {
         withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
@@ -93,6 +102,7 @@ pipeline {
             echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
             docker push "$IMAGE_NAME:$BUILD_TAG"
             docker push "$IMAGE_NAME:latest"
+            docker logout || true
           '''
         }
       }
