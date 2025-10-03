@@ -3,7 +3,7 @@ pipeline {
 
   options {
     skipDefaultCheckout(true)
-    disableConcurrentBuilds()       // avoids overlapping builds, but we still stash/unstash for safety
+    disableConcurrentBuilds()       // stop Jenkins creating @2, @3 workspaces
     timestamps()
   }
 
@@ -26,19 +26,13 @@ pipeline {
           userRemoteConfigs: [[ url: 'https://github.com/shrutichaudhari33/aws-elastic-beanstalk-express-js-sample.git' ]],
           gitTool: 'git'
         ])
-        sh 'ls -la' // prove package.json is here
-        // Save the workspace so every container stage can restore it,
-        // regardless of Jenkins using @2/@3 folders.
-        stash name: 'ws', includes: '**/*', useDefaultExcludes: false, allowEmpty: false
+        sh 'ls -la'   // sanity check: package.json should be here
       }
     }
 
     stage('Install & Test (Node 16)') {
       agent { docker { image 'node:16-bullseye'; args '-u root:root'; reuseNode true } }
       steps {
-        // Restore code into whatever workspace this container uses
-        deleteDir()
-        unstash 'ws'
         sh '''
           echo "Contents of workspace (node stage):"
           ls -la
@@ -57,9 +51,6 @@ pipeline {
       agent { docker { image 'docker:24-cli'; args '-u root:root'; reuseNode true } }
       environment { DOCKER_HOST = 'tcp://dind:2375' }
       steps {
-        // Ensure Docker build context exists in this container workspace
-        deleteDir()
-        unstash 'ws'
         sh '''
           docker version || true
           docker build -f Dockerfile \
@@ -71,10 +62,7 @@ pipeline {
 
     stage('Snyk - Open Source (deps)') {
       agent { docker { image 'snyk/snyk:docker'; args '-u root:root'; reuseNode true } }
-      environment { DOCKER_HOST = 'tcp://dind:2375' }
       steps {
-        deleteDir()
-        unstash 'ws'
         withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
           sh 'snyk test --severity-threshold=high'
         }
