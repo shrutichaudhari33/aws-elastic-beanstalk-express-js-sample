@@ -2,32 +2,52 @@ pipeline {
   agent any
 
   options {
-    // In SCM mode, Jenkins already does the checkout we need.
-    // DO NOT set skipDefaultCheckout(true) here.
+    skipDefaultCheckout(true)          // stop the implicit "Declarative: Checkout SCM"
     timestamps()
-    // ansiColor('xterm') // uncomment ONLY if AnsiColor plugin is installed
     buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '20'))
   }
 
+  tools {
+    git 'git'                          // <-- matches your Tools page (Name: git, Path: /usr/bin/git)
+  }
+
   environment {
-    // Provided by docker-compose (DinD)
     DOCKER_HOST   = 'tcp://dind:2375'
     DOCKER_DRIVER = 'overlay2'
-
-    IMAGE_NAME = 'shrutichaudhari33/aws-elastic-beanstalk-sample'
-    BUILD_TAG  = "${env.BUILD_NUMBER}"
+    IMAGE_NAME    = 'shrutichaudhari33/aws-elastic-beanstalk-sample'
+    BUILD_TAG     = "${env.BUILD_NUMBER}"
   }
 
   stages {
+    stage('Checkout') {
+      steps {
+        deleteDir() // nuke stale workspaces & half-baked .git states
+        checkout([
+          $class: 'GitSCM',
+          branches: [[name: '*/main']],
+          userRemoteConfigs: [[
+            url: 'https://github.com/shrutichaudhari33/aws-elastic-beanstalk-express-js-sample.git'
+            // Repo is public; omit credentials to avoid GIT_ASKPASS oddities.
+            // If you insist on creds, set: credentialsId: 'b8ff5aed-e92e-456b-ad6b-00e91a1fc29c'
+          ]],
+          extensions: [
+            [$class: 'CloneOption', noTags: false, depth: 0, shallow: false]
+          ],
+          gitTool: 'git'
+        ])
+        sh 'git rev-parse --is-inside-work-tree'
+      }
+    }
 
     stage('Install & Test (Node 16)') {
       steps {
         sh '''
           set -e
-          docker run --rm -v "$PWD":/app -w /app node:16 npm install --save
-          # Don’t fail if there is no test script
-          docker run --rm -v "$PWD":/app -w /app node:16 sh -lc \
-            'npm run -s test || { echo "No tests defined in package.json"; exit 0; }'
+          docker run --rm -v "$PWD":/app -w /app node:16-bullseye bash -lc '
+            node -v
+            if [ -f package-lock.json ]; then npm ci; else npm install; fi
+            npm -s test || { echo "No tests defined"; exit 0; }
+          '
         '''
       }
     }
@@ -50,10 +70,10 @@ pipeline {
       steps {
         sh '''
           set -e
-          docker build -f "$PWD/Dockerfile" \
+          docker build -f Dockerfile \
             -t "$IMAGE_NAME:$BUILD_TAG" \
             -t "$IMAGE_NAME:latest" \
-            "$PWD"
+            .
         '''
       }
     }
@@ -89,6 +109,7 @@ pipeline {
   post {
     always {
       archiveArtifacts artifacts: '**/*.log, **/npm-*.log', allowEmptyArchive: true
+      echo 'Pipeline finished (success or fail).'
     }
     success { echo 'Pipeline completed successfully.' }
     failure { echo 'Pipeline failed — check stage logs above.' }
