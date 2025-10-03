@@ -1,6 +1,12 @@
 pipeline {
   agent any
-  options { skipDefaultCheckout(true); timestamps() }
+
+  options { 
+    skipDefaultCheckout(true)
+    disableConcurrentBuilds()        //  avoid Jenkins making @2, @3 workspaces
+    timestamps()
+  }
+
   tools { git 'git' }
 
   environment {
@@ -20,34 +26,38 @@ pipeline {
           userRemoteConfigs: [[ url: 'https://github.com/shrutichaudhari33/aws-elastic-beanstalk-express-js-sample.git' ]],
           gitTool: 'git'
         ])
-        sh 'git rev-parse --is-inside-work-tree'
+        sh 'ls -la'   //  confirm package.json exists here
       }
     }
 
-    // No docker CLI needed here
     stage('Install & Test (Node 16)') {
       agent { docker { image 'node:16-bullseye'; args '-u root:root' } }
       steps {
-        sh 'node -v'
-        sh '''
-          if [ -f package-lock.json ]; then
-            npm ci
-          else
-            npm install
-          fi
-          npm -s test || echo "No tests defined"
-        '''
+        dir("${env.WORKSPACE}") {
+          sh '''
+            echo "Contents of workspace:"
+            ls -la
+            node -v
+            if [ -f package-lock.json ]; then
+              npm ci
+            else
+              npm install
+            fi
+            npm -s test || echo "No tests defined"
+          '''
+        }
       }
     }
 
-    //  Use a container that HAS the docker client
     stage('Build Docker Image') {
       agent { docker { image 'docker:24-cli'; args '-u root:root' } }
       environment { DOCKER_HOST = 'tcp://dind:2375' }
       steps {
         sh '''
           docker version || true
-          docker build -f Dockerfile -t "$IMAGE_NAME:$BUILD_TAG" -t "$IMAGE_NAME:latest" .
+          docker build -f Dockerfile \
+            -t "$IMAGE_NAME:$BUILD_TAG" \
+            -t "$IMAGE_NAME:latest" .
         '''
       }
     }
@@ -76,7 +86,9 @@ pipeline {
       agent { docker { image 'docker:24-cli'; args '-u root:root' } }
       environment { DOCKER_HOST = 'tcp://dind:2375' }
       steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKERHUB_USER', passwordVariable: 'DOCKERHUB_PASS')]) {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                                          usernameVariable: 'DOCKERHUB_USER',
+                                          passwordVariable: 'DOCKERHUB_PASS')]) {
           sh '''
             echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
             docker push "$IMAGE_NAME:$BUILD_TAG"
