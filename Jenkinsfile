@@ -3,7 +3,7 @@ pipeline {
 
   options {
     skipDefaultCheckout(true)
-    disableConcurrentBuilds()       // stop Jenkins creating @2, @3 workspaces
+    disableConcurrentBuilds()
     timestamps()
   }
 
@@ -26,10 +26,11 @@ pipeline {
           userRemoteConfigs: [[ url: 'https://github.com/shrutichaudhari33/aws-elastic-beanstalk-express-js-sample.git' ]],
           gitTool: 'git'
         ])
-        sh 'ls -la'   // sanity check: package.json should be here
+        sh 'ls -la'
       }
     }
 
+    //  keep Node inside container
     stage('Install & Test (Node 16)') {
       agent { docker { image 'node:16-bullseye'; args '-u root:root'; reuseNode true } }
       steps {
@@ -47,72 +48,60 @@ pipeline {
       }
     }
 
-stage('Build Docker Image') {
-  agent {
-    docker {
-      image 'docker:24-cli'
-      // share dind's network + set DOCKER_HOST inside the container
-      args '--network=container:dind -u root:root -e DOCKER_HOST=tcp://127.0.0.1:2375'
-      reuseNode true
+    //  run Docker CLI directly on Jenkins (DOCKER_HOST points to dind)
+    stage('Build Docker Image') {
+      steps {
+        sh '''
+          docker version || true
+          docker build -f Dockerfile \
+            -t "$IMAGE_NAME:$BUILD_TAG" \
+            -t "$IMAGE_NAME:latest" .
+        '''
+      }
     }
-  }
-  steps {
-    sh '''
-      docker version || true
-      docker build -f Dockerfile \
-        -t "$IMAGE_NAME:$BUILD_TAG" \
-        -t "$IMAGE_NAME:latest" .
-    '''
-  }
-}
 
     stage('Snyk - Open Source (deps)') {
-      agent { docker { image 'snyk/snyk:docker'; args '-u root:root'; reuseNode true } }
       steps {
         withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
-          sh 'snyk test --severity-threshold=high'
+          sh '''
+            docker run --rm \
+              -e SNYK_TOKEN="$SNYK_TOKEN" \
+              -v "$PWD":/app -w /app \
+              snyk/snyk:docker snyk test --severity-threshold=high
+          '''
         }
       }
     }
 
-stage('Snyk - Container (image)') {
-  agent {
-    docker {
-      image 'snyk/snyk:docker'
-      // use the same trick; no need to mount /var/run/docker.sock anymore
-      args '--network=container:dind -u root:root -e DOCKER_HOST=tcp://127.0.0.1:2375'
-      reuseNode true
+    stage('Snyk - Container (image)') {
+      steps {
+        withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
+          sh '''
+            docker run --rm \
+              -e SNYK_TOKEN="$SNYK_TOKEN" \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              snyk/snyk:docker snyk container test "$IMAGE_NAME:$BUILD_TAG" --severity-threshold=high
+          '''
+        }
+      }
     }
-  }
-  steps {
-    withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
-      sh 'snyk container test "$IMAGE_NAME:$BUILD_TAG" --severity-threshold=high'
-    }
-  }
-}
 
-stage('Push Docker Image') {
-  agent {
-    docker {
-      image 'docker:24-cli'
-      args '--network=container:dind -u root:root -e DOCKER_HOST=tcp://127.0.0.1:2375'
-      reuseNode true
+    stage('Push Docker Image') {
+      steps {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
+                                          usernameVariable: 'DOCKERHUB_USER',
+                                          passwordVariable: 'DOCKERHUB_PASS')]) {
+          sh '''
+            echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
+            docker push "$IMAGE_NAME:$BUILD_TAG"
+            docker push "$IMAGE_NAME:latest"
+            docker logout || true
+          '''
+        }
+      }
     }
   }
-  steps {
-    withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
-                                      usernameVariable: 'DOCKERHUB_USER',
-                                      passwordVariable: 'DOCKERHUB_PASS')]) {
-      sh '''
-        docker login -u "$DOCKERHUB_USER" -p "$DOCKERHUB_PASS"
-        docker push "$IMAGE_NAME:$BUILD_TAG"
-        docker push "$IMAGE_NAME:latest"
-        docker logout || true
-      '''
-    }
-  }
-}
-}
+
   post {
     always {
       archiveArtifacts artifacts: '**/*.log, **/npm-*.log', allowEmptyArchive: true
