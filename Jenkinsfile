@@ -112,7 +112,7 @@ stage('Push Docker Image') {
     }
   }
 }
-
+}
   post {
     always {
       archiveArtifacts artifacts: '**/*.log, **/npm-*.log', allowEmptyArchive: true
