@@ -12,7 +12,7 @@ pipeline {
   environment {
     DOCKER_HOST   = 'tcp://dind:2375'
     DOCKER_DRIVER = 'overlay2'
-    IMAGE_NAME    = 'shrutichaudhari33/aws-elastic-beanstalk-sample'
+    IMAGE_NAME    = 'shruti33/aws-elastic-beanstalk-sample'
     BUILD_TAG     = "${env.BUILD_NUMBER}"
   }
 
