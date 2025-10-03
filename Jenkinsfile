@@ -2,41 +2,32 @@ pipeline {
   agent any
 
   options {
-    skipDefaultCheckout(true)              // ⬅️ stop the auto "Declarative: Checkout SCM"
+    // In SCM mode, Jenkins already does the checkout we need.
+    // DO NOT set skipDefaultCheckout(true) here.
     timestamps()
-    ansiColor('xterm')
+    // ansiColor('xterm') // uncomment ONLY if AnsiColor plugin is installed
     buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '20'))
   }
 
   environment {
-    // DinD socket exposed by docker-compose
-    DOCKER_HOST = 'tcp://dind:2375'
+    // Provided by docker-compose (DinD)
+    DOCKER_HOST   = 'tcp://dind:2375'
     DOCKER_DRIVER = 'overlay2'
+
     IMAGE_NAME = 'shrutichaudhari33/aws-elastic-beanstalk-sample'
-    BUILD_TAG = "${env.BUILD_NUMBER}"
+    BUILD_TAG  = "${env.BUILD_NUMBER}"
   }
 
   stages {
-
-    stage('Checkout SCM') {
-      steps {
-        git branch: 'main',
-            url: 'https://github.com/shrutichaudhari33/aws-elastic-beanstalk-express-js-sample.git'
-      }
-    }
 
     stage('Install & Test (Node 16)') {
       steps {
         sh '''
           set -e
-          docker run --rm \
-            -v "$PWD":/app -w /app \
-            node:16 npm install --save
-
-          # Some forks have no test script; don’t fail the build if missing.
-          docker run --rm \
-            -v "$PWD":/app -w /app \
-            node:16 sh -lc 'npm run -s test || { echo "No tests defined in package.json"; exit 0; }'
+          docker run --rm -v "$PWD":/app -w /app node:16 npm install --save
+          # Don’t fail if there is no test script
+          docker run --rm -v "$PWD":/app -w /app node:16 sh -lc \
+            'npm run -s test || { echo "No tests defined in package.json"; exit 0; }'
         '''
       }
     }
@@ -72,7 +63,6 @@ pipeline {
         withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
           sh '''
             set -e
-            # Scan the built image via Docker socket (DinD)
             docker run --rm \
               -e SNYK_TOKEN="$SNYK_TOKEN" \
               -v /var/run/docker.sock:/var/run/docker.sock \
@@ -97,13 +87,10 @@ pipeline {
   }
 
   post {
-    success {
-      echo 'Pipeline completed successfully.'
-      archiveArtifacts artifacts: '**/npm-debug.log,**/snyk*.txt', allowEmptyArchive: true
+    always {
+      archiveArtifacts artifacts: '**/*.log, **/npm-*.log', allowEmptyArchive: true
     }
-    failure {
-      echo 'Pipeline failed — check stage logs above.'
-      archiveArtifacts artifacts: '**/npm-debug.log,**/snyk*.txt', allowEmptyArchive: true
-    }
+    success { echo 'Pipeline completed successfully.' }
+    failure { echo 'Pipeline failed — check stage logs above.' }
   }
 }
