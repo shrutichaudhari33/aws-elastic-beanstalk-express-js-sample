@@ -30,7 +30,7 @@ pipeline {
       }
     }
 
-    //  keep Node inside container
+    // keep Node inside container
     stage('Install & Test (Node 16)') {
       agent { docker { image 'node:16-bullseye'; args '-u root:root'; reuseNode true } }
       steps {
@@ -48,7 +48,7 @@ pipeline {
       }
     }
 
-    //  run Docker CLI directly on Jenkins (DOCKER_HOST points to dind)
+    // run Docker CLI directly on Jenkins (DOCKER_HOST points to dind)
     stage('Build Docker Image') {
       steps {
         sh '''
@@ -63,12 +63,21 @@ pipeline {
     stage('Snyk - Open Source (deps)') {
       steps {
         withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
-          sh '''
-            docker run --rm \
-              -e SNYK_TOKEN="$SNYK_TOKEN" \
-              -v "$PWD":/app -w /app \
-              snyk/snyk:docker snyk test --severity-threshold=high
-          '''
+          script {
+            def code = sh(
+              returnStatus: true,
+              script: '''
+                docker run --rm \
+                  -e SNYK_TOKEN="$SNYK_TOKEN" \
+                  -v "$PWD":/app -w /app \
+                  snyk/snyk:docker snyk test --severity-threshold=high
+              '''
+            )
+            if (code != 0) {
+              currentBuild.result = 'UNSTABLE'
+              echo "Snyk OSS scan found issues (exit ${code}) — marking UNSTABLE and continuing."
+            }
+          }
         }
       }
     }
@@ -76,12 +85,21 @@ pipeline {
     stage('Snyk - Container (image)') {
       steps {
         withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
-          sh '''
-            docker run --rm \
-              -e SNYK_TOKEN="$SNYK_TOKEN" \
-              -v /var/run/docker.sock:/var/run/docker.sock \
-              snyk/snyk:docker snyk container test "$IMAGE_NAME:$BUILD_TAG" --severity-threshold=high
-          '''
+          script {
+            def code = sh(
+              returnStatus: true,
+              script: '''
+                docker run --rm \
+                  -e SNYK_TOKEN="$SNYK_TOKEN" \
+                  -v /var/run/docker.sock:/var/run/docker.sock \
+                  snyk/snyk:docker snyk container test "$IMAGE_NAME:$BUILD_TAG" --severity-threshold=high
+              '''
+            )
+            if (code != 0) {
+              currentBuild.result = 'UNSTABLE'
+              echo "Snyk image scan found issues (exit ${code}) — marking UNSTABLE and continuing."
+            }
+          }
         }
       }
     }
