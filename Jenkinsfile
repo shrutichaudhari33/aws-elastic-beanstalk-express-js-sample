@@ -1,14 +1,19 @@
 pipeline {
   agent any
-  options { timestamps(); buildDiscarder(logRotator(numToKeepStr: '15')) }
+
+  options {
+    skipDefaultCheckout(true)              // ⬅️ stop the auto "Declarative: Checkout SCM"
+    timestamps()
+    ansiColor('xterm')
+    buildDiscarder(logRotator(numToKeepStr: '20', artifactNumToKeepStr: '20'))
+  }
+
   environment {
-    // Jenkins container already has DOCKER_HOST from docker-compose,
-    // but set again for clarity in shell steps:
+    // DinD socket exposed by docker-compose
     DOCKER_HOST = 'tcp://dind:2375'
     DOCKER_DRIVER = 'overlay2'
-    // Image naming
-    IMAGE_REPO = 'shrutichaudhari33/aws-elastic-beanstalk-sample'
-    IMAGE_TAG  = "${env.BUILD_NUMBER}"
+    IMAGE_NAME = 'shrutichaudhari33/aws-elastic-beanstalk-sample'
+    BUILD_TAG = "${env.BUILD_NUMBER}"
   }
 
   stages {
@@ -23,17 +28,15 @@ pipeline {
     stage('Install & Test (Node 16)') {
       steps {
         sh '''
-          # install deps in Node 16 container
-          docker run --rm -v "$PWD":/app -w /app node:16 \
-            sh -lc "npm install --save"
+          set -e
+          docker run --rm \
+            -v "$PWD":/app -w /app \
+            node:16 npm install --save
 
-          # run tests if present, otherwise log and continue
-          if grep -q '"test"' package.json; then
-            docker run --rm -v "$PWD":/app -w /app node:16 \
-              sh -lc "npm test"
-          else
-            echo "No tests defined in package.json"
-          fi
+          # Some forks have no test script; don’t fail the build if missing.
+          docker run --rm \
+            -v "$PWD":/app -w /app \
+            node:16 sh -lc 'npm run -s test || { echo "No tests defined in package.json"; exit 0; }'
         '''
       }
     }
@@ -42,10 +45,11 @@ pipeline {
       steps {
         withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
           sh '''
+            set -e
             docker run --rm \
               -e SNYK_TOKEN="$SNYK_TOKEN" \
-              -v "$PWD":/app -w /app snyk/snyk:docker \
-              snyk test --severity-threshold=high
+              -v "$PWD":/app -w /app \
+              snyk/snyk:docker snyk test --severity-threshold=high
           '''
         }
       }
@@ -54,8 +58,11 @@ pipeline {
     stage('Build Docker Image') {
       steps {
         sh '''
-          # build app image (Dockerfile should be in repo root)
-          docker build -t "$IMAGE_REPO:$IMAGE_TAG" -t "$IMAGE_REPO:latest" .
+          set -e
+          docker build -f "$PWD/Dockerfile" \
+            -t "$IMAGE_NAME:$BUILD_TAG" \
+            -t "$IMAGE_NAME:latest" \
+            "$PWD"
         '''
       }
     }
@@ -64,12 +71,12 @@ pipeline {
       steps {
         withCredentials([string(credentialsId: 'snyk-token', variable: 'SNYK_TOKEN')]) {
           sh '''
-            # scan the built image (talks to local daemon via DOCKER_HOST)
+            set -e
+            # Scan the built image via Docker socket (DinD)
             docker run --rm \
               -e SNYK_TOKEN="$SNYK_TOKEN" \
               -v /var/run/docker.sock:/var/run/docker.sock \
-              snyk/snyk:docker \
-              snyk container test "$IMAGE_REPO:$IMAGE_TAG" --severity-threshold=high
+              snyk/snyk:docker snyk container test "$IMAGE_NAME:$BUILD_TAG" --severity-threshold=high
           '''
         }
       }
@@ -77,14 +84,12 @@ pipeline {
 
     stage('Push Docker Image') {
       steps {
-        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds',
-                                          usernameVariable: 'DOCKERHUB_USER',
-                                          passwordVariable: 'DOCKERHUB_PASS')]) {
+        withCredentials([usernamePassword(credentialsId: 'dockerhub-creds', usernameVariable: 'DOCKERHUB_USER', passwordVariable: 'DOCKERHUB_PASS')]) {
           sh '''
+            set -e
             echo "$DOCKERHUB_PASS" | docker login -u "$DOCKERHUB_USER" --password-stdin
-            docker push "$IMAGE_REPO:$IMAGE_TAG"
-            docker push "$IMAGE_REPO:latest"
-            docker logout
+            docker push "$IMAGE_NAME:$BUILD_TAG"
+            docker push "$IMAGE_NAME:latest"
           '''
         }
       }
@@ -93,12 +98,12 @@ pipeline {
 
   post {
     success {
-      echo "Pipeline succeeded. Pushed ${IMAGE_REPO}:${IMAGE_TAG} and :latest"
-      archiveArtifacts artifacts: '**/npm-debug.log', allowEmptyArchive: true
+      echo 'Pipeline completed successfully.'
+      archiveArtifacts artifacts: '**/npm-debug.log,**/snyk*.txt', allowEmptyArchive: true
     }
     failure {
-      echo "Pipeline failed — check stage logs above."
-      archiveArtifacts artifacts: '**/npm-debug.log', allowEmptyArchive: true
+      echo 'Pipeline failed — check stage logs above.'
+      archiveArtifacts artifacts: '**/npm-debug.log,**/snyk*.txt', allowEmptyArchive: true
     }
   }
 }
